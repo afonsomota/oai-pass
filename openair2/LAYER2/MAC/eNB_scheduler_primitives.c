@@ -44,6 +44,7 @@
 
 #include "RRC/LTE/rrc_extern.h"
 #include "RRC/L2_INTERFACE/openair_rrc_L2_interface.h"
+#include "rrc_eNB_UE_context.h"
 
 //#include "LAYER2/MAC/pre_processor.c"
 #include "pdcp.h"

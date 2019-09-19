@@ -351,8 +351,21 @@ rlc_op_status_t rlc_data_req     (const protocol_ctxt_t *const ctxt_pP,
 #endif
 #if T_TRACER
 
-  if (ctxt_pP->enb_flag)
-    T(T_ENB_RLC_DL, T_INT(ctxt_pP->module_id), T_INT(ctxt_pP->rnti), T_INT(rb_idP), T_INT(sdu_sizeP));
+  if (ctxt_pP->enb_flag) {
+    T(T_ENB_RLC_DL, T_INT(ctxt_pP->module_id), T_INT(ctxt_pP->rnti),
+      T_INT(rb_idP), T_INT(sdu_sizeP));
+    UE_list_t *UE_list = &RC.mac[ctxt_pP->module_id]->UE_list;
+    int ue_id = -1;
+    for (int CC_id = 0; CC_id < (int)RC.nb_mac_CC[ctxt_pP->module_id]; CC_id++) {
+      for (ue_id = 0; ue_id < MAX_MOBILES_PER_ENB; ue_id++) {
+        if(UE_list->UE_template[CC_id][ue_id].rnti == ctxt_pP->rnti) {
+          break;
+        }
+      }
+    }
+    AssertFatal(ue_id != -1, "Could not find user for RNTI");
+    T(T_SCHEDULER_IN,T_INT(ue_id),T_INT(UE_list->assoc_dl_slice_idx[ue_id]),T_INT(sdu_sizeP));
+  }
 
 #endif
 

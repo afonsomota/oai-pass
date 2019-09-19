@@ -1023,9 +1023,43 @@ ID = UE_PHY_MEAS
     GROUP = ALL:PHY:GRAPHIC:HEAVY:UE
     FORMAT = int,eNB_ID : int,frame : int,subframe : int,rsrp : int,rssi : int,snr: int,rx_power: int,noise_power: int,w_cqi: int,freq_offset
 
+ID = SCHEDULER_IN
+    DESC = Personalized "traffic being input to scheduler" trace
+    GROUP = ALL:PASS
+    FORMAT = int,ue_id : int,slice : int,size
+
+ID = SCHEDULER_OUT
+    DESC = Personalized "traffic being output to scheduler" trace
+    GROUP = ALL:PASS
+    FORMAT = int,ue_id : int,slice : int,size : int, rbs
+
+ID = RESOURCES_SCHEDULED
+    DESC = Resources scheduled per slice.
+    GROUP = ALL:PASS
+    FORMAT = int,slice : int,frame : int,subframe : int,phase12 : int,phase3
+
+ID = SCHEDULING
+    DESC = Scheduling timestamp
+    GROUP = ALL:PASS
+    FORMAT = int,frame : int,subframe
+
+ID = SLA_VIOLATION
+    DESC = Detected SLA violation
+    GROUP = ALL:PASS
+    FORMAT = int,slice : int,infraction_size
+
+ID = tokens
+    DESC = Token dbg
+    GROUP = ALL
+    FORMAT = int,tokens : int,slice : string,place
+
 #for debug/test - not used
 ID = first
-ID = buf_test
+    DESC = UE PHY measurements
+    GROUP = ALL
+    FORMAT = int,total_pct : int,total_sched_traffic : int,N_RB_DL : int,total_r_sched : int,total_p_sched : int,total_r_traffic : int,total_p_traffic : int,added_r_traffic : int,added_p_traffic
+
+
 
 #VCD variables and functions
 

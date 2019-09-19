@@ -38,6 +38,8 @@
 #include "assertions.h"
 #include "common/utils/LOG/vcd_signal_dumper.h"
 
+#include "common/ran_context.h"
+extern RAN_CONTEXT_t RC;
 //#define DEBUG_MAC_INTERFACE 1
 
 //-----------------------------------------------------------------------------
@@ -224,8 +226,20 @@ tbs_size_t mac_rlc_data_req(
   }
 
 #if T_TRACER
-  if (enb_flagP)
-    T(T_ENB_RLC_MAC_DL, T_INT(module_idP), T_INT(rntiP), T_INT(channel_idP), T_INT(ret_tb_size));
+  if (enb_flagP) {
+    T(T_ENB_RLC_MAC_DL, T_INT(module_idP), T_INT(rntiP), T_INT(channel_idP),
+      T_INT(ret_tb_size));
+    UE_list_t *UE_list = &RC.mac[module_idP]->UE_list;
+    int ue_id;
+    for (int CC_id = 0; CC_id < (int)RC.nb_mac_CC[module_idP]; CC_id++) {
+      for (ue_id = 0; ue_id < MAX_MOBILES_PER_ENB; ue_id++) {
+        if(UE_list->UE_template[CC_id][ue_id].rnti == rntiP) {
+          break;
+        }
+      }
+    }
+    T(T_SCHEDULER_OUT,T_INT(ue_id),T_INT(UE_list->assoc_dl_slice_idx[ue_id]+3),T_INT(ret_tb_size-2),T_INT(0));
+  }
 #endif
 
   VCD_SIGNAL_DUMPER_DUMP_FUNCTION_BY_NAME(VCD_SIGNAL_DUMPER_FUNCTIONS_MAC_RLC_DATA_REQ,VCD_FUNCTION_OUT);

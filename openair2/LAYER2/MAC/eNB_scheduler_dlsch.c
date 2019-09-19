@@ -491,6 +491,13 @@ set_slice_resource_allocation(module_id_t mod_id,
         //fprintf(stderr,"%d %d\n", sli->dl[slice_idx].config.rate.rate,
             //sli->dl[slice_idx].config.rate.last_unsent);
         if(sli->dl[slice_idx].config.rate.rate > 0){
+          if(sli->dl[slice_idx].config.rate.rate >
+             sli->dl[slice_idx].config.rate.last_unsent){
+            T(T_SLA_VIOLATION,T_INT(slice_idx),T_INT(
+                sli->dl[slice_idx].config.rate.rate -
+                sli->dl[slice_idx].config.rate.last_unsent
+                ));
+          }
           sli->dl[slice_idx].config.rate.last_unsent =
               cmax(sli->dl[slice_idx].config.rate.rate -
                        sli->dl[slice_idx].config.rate.last_unsent,
@@ -586,6 +593,7 @@ set_slice_resource_allocation(module_id_t mod_id,
      total_sched_traffic += accomodation;
      phase12_sched[p_sched[s]] += accomodation;
      total_pct += pct_to_add;
+     T(T_SLA_VIOLATION,T_INT(p_sched[s]),T_INT(traffic-accomodation));
    }
    goto testret;
  }
@@ -718,6 +726,34 @@ set_slice_resource_allocation(module_id_t mod_id,
 
 
   testret:
+ 
+  for(int slice_idx = 0; slice_idx < sli->n_dl; slice_idx++){
+    if(phase12_sched[slice_idx]> 0 || phase3_sched[slice_idx] > 0){
+      T(T_RESOURCES_SCHEDULED,
+          T_INT(slice_idx),
+          T_INT(frameP),
+          T_INT(subframeP),
+          T_INT(phase12_sched[slice_idx]),
+          T_INT(phase3_sched[slice_idx]));
+    }
+  }
+
+
+  if (total_p_sched > 0 ||
+      total_r_sched > 0 ||
+      total_r_traffic > 0 ||
+      total_p_traffic > 0)
+  {
+    T(T_first, T_INT((int)(total_pct * 100)),
+               T_INT(total_sched_traffic),
+               T_INT(N_RB_DL),
+               T_INT(total_r_sched),
+               T_INT(total_p_sched),
+               T_INT(total_r_traffic),
+               T_INT(total_p_traffic),
+               T_INT(total_r_traffic + added_r_traffic),
+               T_INT(total_p_traffic + added_p_traffic));
+  }
   AssertFatal(total_pct >= 0 && total_pct <= 1.01,
               "total_pct not within legal boundaries: %f, r_slices %d, p_slices %d",total_pct, total_r_sched, total_p_sched);
   return;
@@ -733,6 +769,7 @@ schedule_dlsch(module_id_t module_idP, frame_t frameP, sub_frame_t subframeP, in
   slice_info_t *sli = &RC.mac[module_idP]->slice_info;
   memset(sli->rballoc_sub, 0, sizeof(sli->rballoc_sub));
 
+  T(T_SCHEDULING,T_INT(frameP),T_INT(subframeP));
   if(sli->is_new) {
 
     for (CC_id = 0; CC_id < RC.nb_mac_CC[module_idP]; CC_id++) {
@@ -1006,6 +1043,29 @@ schedule_ue_spec(module_id_t module_idP,
              frameP,
              subframeP);
   }
+
+/*
+  if (! eNB->slice_info.is_new){
+    for (UE_id = UE_list->head; UE_id >= 0; UE_id = UE_list->next[UE_id]) {
+      if (UE_RNTI(module_idP, UE_id) == NOT_A_RNTI) continue;
+      if (UE_list->UE_sched_ctrl[UE_id].ul_out_of_sync == 1) continue;
+      if (!ue_dl_slice_membership(module_idP, UE_id, slice_idxP)) continue;
+      ue_sched_ctrl = &UE_list->UE_sched_ctrl[UE_id];
+      for (i = 0; i < UE_num_active_CC(UE_list, UE_id); i++) {
+        CC_id = UE_list->ordered_CCids[i][UE_id];
+        out_profile_scheduled += ue_sched_ctrl->pre_nb_available_rbs[CC_id];
+      }
+    }
+    out_profile_scheduled-=in_profile_scheduled;
+    if(in_profile_scheduled + out_profile_scheduled > 0)
+      T(T_RESOURCES_SCHEDULED,
+        T_INT(slice_idxP),
+        T_INT(frameP),
+        T_INT(subframeP),
+        T_INT(in_profile_scheduled),
+        T_INT(out_profile_scheduled));
+  }
+*/
 
   for (CC_id = 0; CC_id < nb_mac_CC; CC_id++) {
     LOG_D(MAC, "doing schedule_ue_spec for CC_id %d\n",
@@ -1844,6 +1904,12 @@ schedule_ue_spec(module_id_t module_idP,
             T_INT(harq_pid),
             T_BUFFER(dlsch_pdu->payload[0],
                      TBS));
+          if(sdu_length_total - 2 > 0) {
+            T(T_SCHEDULER_OUT, T_INT(UE_id),
+              T_INT(UE_list->assoc_dl_slice_idx[UE_id]),
+              T_INT(sdu_length_total - 2), T_INT(nb_rb));
+          }
+
           ue_template->nb_rb[harq_pid] = nb_rb;
           add_ue_dlsch_info(module_idP,
                             CC_id,
