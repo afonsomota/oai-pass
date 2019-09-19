@@ -30,6 +30,9 @@
  */
 
 #include <dlfcn.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
 #include "mac.h"
 #include "mac_proto.h"
 #include "mac_extern.h"
@@ -70,28 +73,111 @@ void init_UE_list(UE_list_t *UE_list)
 
 void init_slice_info(slice_info_t *sli)
 {
+  FILE* config;
+  char line[1024];
+  char* read_output;
+  uint8_t is_new;
+  uint32_t total_reserved=0;
+
+
+  config = fopen("/home/oai/cell-client/slices.cnf","r");
+
+  AssertFatal(config!=NULL,"No slice configuration file");
+
+  read_output = fgets(line, sizeof(line),config);
+  AssertFatal(read_output!=NULL,"Slice configuration file empty");
+
+  if(strcmp(line,"old\n")==0){
+    is_new = 0;
+    sli->is_new = 0;
+  }else if(strcmp(line,"new\n")==0){
+    is_new = 1;
+    sli->is_new = 1;
+  }else {
+    AssertFatal(1!=1,"Slice method is either old or new, not %s",line);
+  }
+
   sli->intraslice_share_active = 1;
   sli->interslice_share_active = 1;
 
-  sli->n_dl = 1;
+  uint8_t s = 0;
+  sli->n_dl = 0;
+  sli->n_ul = 0;
   memset(sli->dl, 0, sizeof(slice_sched_conf_dl_t) * MAX_NUM_SLICES);
-  sli->dl[0].pct = 1.0;
-  sli->dl[0].prio = 10;
-  sli->dl[0].pos_high = N_RBG_MAX;
-  sli->dl[0].maxmcs = 28;
-  sli->dl[0].sorting = 0x012345;
-  sli->dl[0].sched_name = "schedule_ue_spec";
-  sli->dl[0].sched_cb = dlsym(NULL, sli->dl[0].sched_name);
-  AssertFatal(sli->dl[0].sched_cb, "DLSCH scheduler callback is NULL\n");
-
-  sli->n_ul = 1;
   memset(sli->ul, 0, sizeof(slice_sched_conf_ul_t) * MAX_NUM_SLICES);
-  sli->ul[0].pct = 1.0;
-  sli->ul[0].maxmcs = 20;
-  sli->ul[0].sorting = 0x0123;
-  sli->ul[0].sched_name = "schedule_ulsch_rnti";
-  sli->ul[0].sched_cb = dlsym(NULL, sli->ul[0].sched_name);
-  AssertFatal(sli->ul[0].sched_cb, "ULSCH scheduler callback is NULL\n");
+  while (fgets(line, sizeof(line), config)) {
+    if(strlen(line)==0 || line[0] == '#' || line[0]=='\n')
+      continue;
+    sli->n_dl++;
+    sli->dl[s].id = s;
+    sli->dl[s].pct = 1.0;
+    sli->dl[s].prio = 10;
+    sli->dl[s].pos_high = N_RBG_MAX;
+    sli->dl[s].maxmcs = 28;
+    sli->dl[s].sorting = 0x012345;
+    sli->dl[s].sched_name = "schedule_ue_spec";
+    sli->dl[s].sched_cb = dlsym(NULL, sli->dl[s].sched_name);
+    //sli->dl[s].accounting = 1;
+    AssertFatal(sli->dl[s].sched_cb, "DLSCH scheduler callback is NULL\n");
+    sli->n_ul++;
+    sli->ul[s].id = s;
+    sli->ul[s].pct = 1.0;
+    sli->ul[s].maxmcs = 20;
+    sli->ul[s].sorting = 0x0123;
+    sli->ul[s].sched_name = "schedule_ulsch_rnti";
+    sli->ul[s].sched_cb = dlsym(NULL, sli->ul[s].sched_name);
+    AssertFatal(sli->ul[s].sched_cb, "ULSCH scheduler callback is NULL\n");
+
+    if(is_new) {
+      if (strcmp(line, "PREEMPTIVE\n") == 0) {
+        uint16_t rate, capacity;
+        read_output = fgets(line, sizeof(line), config);
+        AssertFatal(read_output!=NULL, "NULL slice config.");
+        sscanf(line,"%hu %hu",&rate,&capacity);
+        sli->dl[s].type = PREEMPTIVE;
+        sli->dl[s].config.filter.rate = rate;
+        sli->dl[s].config.filter.capacity = capacity;
+        sli->dl[s].config.filter.tokens = 0;
+        sli->dl[s].config.filter.overprovision = 0;
+
+        sli->ul[s].pct = rate;
+        total_reserved += rate;
+      } else if (strcmp(line, "REGULAR\n") == 0) {
+        uint16_t min_sla_rate, time_gap;
+        read_output = fgets(line, sizeof(line), config);
+        AssertFatal(read_output!=NULL, "NULL slice config.");
+        sscanf(line,"%hu %hu",&min_sla_rate,&time_gap);
+        sli->dl[s].type = REGULAR;
+        sli->dl[s].config.rate.min_sla_rate = min_sla_rate;
+        sli->dl[s].config.rate.time_gap = time_gap;
+        sli->dl[s].config.rate.last_unsent = 0;
+        sli->dl[s].config.rate.rate = 0;
+
+        sli->ul[s].pct = min_sla_rate;
+        total_reserved += min_sla_rate;
+      } else {
+        AssertFatal(1 != 1, "Slice %d is either PREEMPTIVE or REGULAR, not %s",
+                    s, line);
+      }
+    } else {
+      int priority;
+      float pct;
+      sscanf(line,"%d %f",&priority,&pct);
+      fprintf(stderr,"%d %f\n",priority,pct);
+      sli->dl[s].pct = pct;
+      sli->dl[s].prio = priority;
+
+      sli->ul[s].pct = pct;
+    }
+    s++;
+  }
+
+  if(is_new){
+    for(s = 0; s < sli->n_ul; s++){
+      sli->ul[s].pct /= total_reserved;
+    }
+  }
+
 }
 
 void mac_top_init_eNB(void)

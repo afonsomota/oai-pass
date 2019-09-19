@@ -2189,8 +2189,8 @@ add_new_ue(module_id_t mod_idP,
            sizeof(eNB_UE_STATS));
     UE_list->UE_sched_ctrl[UE_id].ue_reestablishment_reject_timer = 0;
     /* default slice in case there was something different */
-    UE_list->assoc_dl_slice_idx[UE_id] = 0;
-    UE_list->assoc_ul_slice_idx[UE_id] = 0;
+    UE_list->assoc_dl_slice_idx[UE_id] = UE_id % 3;
+    UE_list->assoc_ul_slice_idx[UE_id] = UE_id % 3;
     UE_list->UE_sched_ctrl[UE_id].ta_update = 31;
 
     for (j = 0; j < 8; j++) {
