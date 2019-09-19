@@ -417,18 +417,398 @@ set_ul_DAI(int module_idP,
 
   return;
 }
+//------------------------------------------------------------------------------
+void
+set_slice_resource_allocation(module_id_t mod_id,
+                              frame_t frameP,
+                              sub_frame_t subframeP,
+                              slice_info_t *sli,
+                              uint16_t nb_rbs_required_per_slice[MAX_NUM_SLICES],
+                              uint16_t available_rbs
+                              ) {
+  uint32_t p_sched[MAX_NUM_SLICES],
+           total_p_sched = 0,
+           r_sched[MAX_NUM_SLICES],
+           total_r_sched = 0,
+           total_tokens = 0,
+           p_traffic[MAX_NUM_SLICES],
+           total_p_traffic = 0,
+           r_traffic[MAX_NUM_SLICES],
+           total_r_traffic = 0,
+           resources_remaining,
+           total_sched_traffic=0,
+           phase12_sched[MAX_NUM_SLICES],
+           phase3_sched[MAX_NUM_SLICES];
+  int N_RB_DL = 0, total_rate = 0;
+  float total_pct=0;
+  uint32_t added_r_traffic = 0;
+  uint32_t added_p_traffic = 0;
+  int tti_rate[MAX_NUM_SLICES];
 
+  for (int CC_id = 0; CC_id < RC.nb_mac_CC[mod_id]; CC_id++) {
+    N_RB_DL += to_prb(RC.mac[mod_id]->common_channels[CC_id].mib->message.dl_Bandwidth);
+  }
+  resources_remaining = N_RB_DL;
+  //resources_remaining = available_rbs;
+
+
+  //Preparation phase
+  float highest_overprovision = 0;
+  //TODO: default to subframe modulo
+  int highest_overprovision_index = 0;
+  for(int slice_idx = 0; slice_idx < sli->n_dl; slice_idx++){
+    sli->dl[slice_idx].pct = 0.0;
+    phase12_sched[slice_idx] = 0;
+    phase3_sched[slice_idx] = 0;
+    if (sli->dl[slice_idx].type == PREEMPTIVE) {
+      p_slice_token_cycle(&(sli->dl[slice_idx].config.filter));
+      if (nb_rbs_required_per_slice[slice_idx] == 0) {
+        //If there is no traffic, set overprovision now and skip.
+        sli->dl[slice_idx].config.filter.overprovision =
+            0 + 0.3 * sli->dl[slice_idx].config.filter.overprovision;
+        continue;
+      }
+
+      if (sli->dl[slice_idx].config.filter.overprovision >
+                                                highest_overprovision) {
+        highest_overprovision =
+                      sli->dl[slice_idx].config.filter.overprovision;
+        highest_overprovision_index = total_p_sched;
+      }
+
+      p_traffic[total_p_sched] = cmin(nb_rbs_required_per_slice[slice_idx],
+                                   sli->dl[slice_idx].config.filter.tokens);
+
+      p_traffic[total_p_sched] = cmin(p_traffic[total_p_sched],
+                                      resources_remaining);
+
+      total_p_traffic += p_traffic[total_p_sched];
+      total_tokens += sli->dl[slice_idx].config.filter.tokens;
+      p_sched[total_p_sched] = slice_idx;
+      total_p_sched++;
+    } else if (sli->dl[slice_idx].type == REGULAR) {
+      if (sli->dl[slice_idx].config.rate.gap_count == 1){
+        //fprintf(stderr,"%d %d\n", sli->dl[slice_idx].config.rate.rate,
+            //sli->dl[slice_idx].config.rate.last_unsent);
+        if(sli->dl[slice_idx].config.rate.rate > 0){
+          sli->dl[slice_idx].config.rate.last_unsent =
+              cmax(sli->dl[slice_idx].config.rate.rate -
+                       sli->dl[slice_idx].config.rate.last_unsent,
+                   0);
+          sli->dl[slice_idx].config.rate.gap_count =
+              sli->dl[slice_idx].config.rate.time_gap;
+        }else{
+          sli->dl[slice_idx].config.rate.last_unsent = 0;
+        }
+        sli->dl[slice_idx].config.rate.rate =
+            sli->dl[slice_idx].config.rate.min_sla_rate *
+            sli->dl[slice_idx].config.rate.time_gap +
+            sli->dl[slice_idx].config.rate.last_unsent;
+        sli->dl[slice_idx].config.rate.gap_count =
+            sli->dl[slice_idx].config.rate.time_gap;
+      }else{
+        sli->dl[slice_idx].config.rate.gap_count--;
+      }
+      AssertFatal(sli->dl[slice_idx].config.rate.gap_count,"Gap count should not be zero");
+      if (nb_rbs_required_per_slice[slice_idx] == 0) continue;
+      tti_rate[total_r_sched] = sli->dl[slice_idx].config.rate.rate /
+                                    sli->dl[slice_idx].config.rate.gap_count +
+                                    1; // Ceiling +-
+      total_rate += tti_rate[total_r_sched];
+      if(tti_rate[total_r_sched] > 0)
+        r_traffic[total_r_sched] = cmin (nb_rbs_required_per_slice[slice_idx],
+                                         tti_rate[total_r_sched]);
+      else
+        r_traffic[total_r_sched] = 0;
+      total_r_traffic += r_traffic[total_r_sched];
+      r_sched[total_r_sched] = slice_idx;
+      total_r_sched++;
+    }
+  }
+  if (total_r_traffic == 0){
+    for(int slice_idx = 0; slice_idx < sli->n_dl; slice_idx++){
+      if (sli->dl[slice_idx].type == REGULAR) {
+        sli->dl[slice_idx].config.rate.rate = 0;
+        sli->dl[slice_idx].config.rate.last_unsent = 0;
+        sli->dl[slice_idx].config.rate.gap_count = 1;
+      }
+    }
+  }
+  if (total_r_sched == 0 && total_p_sched == 0) goto testret;
+
+ //PHASE I
+ //If required P traffic can all be served this opportunity, then it is
+ if(total_p_traffic <= resources_remaining){
+   for(int s = 0; s < total_p_sched; s++){
+     uint32_t traffic = p_traffic[s];
+     AssertFatal(resources_remaining >= traffic, "Overflow detected in Phase 1 P standard");
+     resources_remaining -= traffic;
+     AssertFatal(sli->dl[p_sched[s]].config.filter.tokens >= traffic,
+         "Overflow detected in Phase 1 P standard: tokens");
+     sli->dl[p_sched[s]].config.filter.tokens -= traffic;
+     sli->dl[p_sched[s]].pct = 1.0*traffic/N_RB_DL;
+     total_sched_traffic += traffic;
+     total_pct += sli->dl[p_sched[s]].pct;
+     phase12_sched[p_sched[s]] += traffic;
+   }
+ }
+ //Otherwise, P traffic accomodation occurs
+ else {
+   uint32_t p_traffic_after_accomodation = total_p_traffic;
+   for(int s = 0; s < total_p_sched; s++) {
+     uint32_t traffic = p_traffic[s];
+     uint32_t tokens = sli->dl[p_sched[s]].config.filter.tokens;
+     float accomodation_fl = 1.0*(traffic + tokens)*
+                            N_RB_DL/(total_p_traffic+total_tokens);
+     uint32_t accomodation = cmin(traffic,(uint32_t) accomodation_fl);
+     AssertFatal(resources_remaining >= accomodation, "Overflow detected in Phase 1 P accomodation");
+     resources_remaining -= accomodation;
+     sli->dl[p_sched[s]].config.filter.tokens -= accomodation;
+     sli->dl[p_sched[s]].pct = 1.0*accomodation/N_RB_DL;
+     total_sched_traffic += accomodation;
+     phase12_sched[p_sched[s]] += accomodation;
+     total_pct += sli->dl[p_sched[s]].pct;
+     p_traffic_after_accomodation -= accomodation;
+     p_traffic[s] -= accomodation;
+   }
+   uint32_t resources_after_accomodation = resources_remaining;
+   for(int s = 0; s < total_p_sched; s++) {
+     uint32_t traffic = p_traffic[s];
+     //2nd round accomotation accomodates for the remaining resources,
+     //available tokens are not considered
+     float accomodation_fl = 1.0*traffic*resources_after_accomodation/
+                                    p_traffic_after_accomodation;
+     uint32_t accomodation = (uint32_t) accomodation_fl;
+     resources_remaining -= accomodation;
+     sli->dl[p_sched[s]].config.filter.tokens -= accomodation;
+     float pct_to_add = 1.0*accomodation/N_RB_DL;
+     sli->dl[p_sched[s]].pct += pct_to_add;
+     total_sched_traffic += accomodation;
+     phase12_sched[p_sched[s]] += accomodation;
+     total_pct += pct_to_add;
+   }
+   goto testret;
+ }
+
+ //PHASE 2
+ uint32_t highest_rate=0;
+ //TODO: mudar para highest traffic? Se sair daquir então, teoricamente,
+ //      quando rate não é 0, o traffic é 0.
+ int highest_rate_index=0;
+ if (total_r_traffic > 0) {
+   highest_rate_index = (frameP * 10 + subframeP) % total_r_sched;
+   if (total_r_traffic < resources_remaining) {
+     for (int s = 0; s < total_r_sched; s++) {
+       uint32_t traffic = r_traffic[s];
+       resources_remaining -= traffic;
+       tti_rate[s] -= traffic;
+       sli->dl[r_sched[s]].config.rate.rate -= traffic;
+       sli->dl[r_sched[s]].pct = 1.0 * traffic / N_RB_DL;
+       total_sched_traffic += traffic;
+       phase12_sched[r_sched[s]] += traffic;
+       total_pct += sli->dl[r_sched[s]].pct;
+       if (sli->dl[r_sched[s]].config.rate.rate > highest_rate) {
+         highest_rate = sli->dl[r_sched[s]].config.rate.rate;
+         highest_rate_index = s;
+       }
+     }
+   } else {
+     int highest_traffic_index = (frameP * 10 + subframeP) % total_r_sched;
+     uint32_t highest_traffic = 0;
+     for (int s = 0; s < total_r_sched; s++) {
+       uint32_t traffic = r_traffic[s];
+       // first accomodation is done regarding available rate
+       float accommodation = tti_rate[s] *
+                             resources_remaining / total_rate;
+       accommodation = cmin(accommodation, traffic);
+       accommodation = cmin(accommodation, resources_remaining);
+       r_traffic[s] -= accommodation;
+       if (r_traffic[s] > highest_traffic) {
+         highest_traffic = r_traffic[s];
+         highest_traffic_index = s;
+       }
+       resources_remaining -= accommodation;
+       tti_rate[s] -= accommodation;
+       sli->dl[r_sched[s]].config.rate.rate -= accommodation;
+       sli->dl[r_sched[s]].pct = 1.0 * accommodation / N_RB_DL;
+       sli->dl[r_sched[s]].config.rate.last_unsent += traffic - accommodation;
+       total_sched_traffic += accommodation;
+       phase12_sched[r_sched[s]] += accommodation;
+       total_pct += sli->dl[r_sched[s]].pct;
+     }
+     // Simulate circular list
+     int s = highest_traffic_index;
+     while (1) {
+       uint32_t traffic = cmin(r_traffic[s], resources_remaining);
+       resources_remaining -= traffic;
+       tti_rate[s] -= traffic;
+       sli->dl[r_sched[s]].config.rate.rate -= traffic;
+       float pct_to_add = 1.0 * traffic / N_RB_DL;
+       sli->dl[r_sched[s]].pct += pct_to_add;
+       sli->dl[r_sched[s]].config.rate.last_unsent -= traffic;
+       total_sched_traffic += traffic;
+       phase12_sched[r_sched[s]] += traffic;
+       total_pct += pct_to_add;
+       if (resources_remaining == 0)
+         break;
+       s++;
+       // back to first position
+       if (s == total_r_sched)
+         s = 0;
+       // Complete round, should not happen
+       if (s == highest_traffic_index)
+         AssertFatal(s != highest_traffic_index,
+                   "Infinite loop in regular scheduling");
+     }
+     goto testret;
+   }
+ }
+
+ //PHASE 3
+ //Simulate circular list beginning in highest_overprovision_index
+  int s = highest_overprovision_index;
+  while (total_p_sched > 0) {
+    uint32_t traffic = nb_rbs_required_per_slice[p_sched[s]] - p_traffic[s];
+    AssertFatal(nb_rbs_required_per_slice[p_sched[s]] >= p_traffic[s],
+                "Overflow detected in Phase 3 (P)\n");
+    traffic = cmin(traffic, resources_remaining);
+    resources_remaining -= traffic;
+    added_p_traffic += traffic;
+    float pct_to_add = 1.0*traffic/N_RB_DL;
+    sli->dl[p_sched[s]].pct += pct_to_add;
+    total_sched_traffic += traffic;
+    phase3_sched[p_sched[s]] += traffic;
+    total_pct += pct_to_add;
+    sli->dl[p_sched[s]].config.filter.overprovision =
+        0.7*traffic/sli->dl[p_sched[s]].config.filter.rate +
+        0.3*sli->dl[p_sched[s]].config.filter.overprovision;
+
+    if (resources_remaining == 0)
+      break;
+
+    s++;
+    if (s == total_p_sched) s = 0;
+    //Break on cycle complete
+    if (s == highest_overprovision_index) break;
+  }
+
+  s = highest_rate_index;
+  while (total_r_sched > 0){
+    uint32_t traffic = nb_rbs_required_per_slice[r_sched[s]] - r_traffic[s];
+    AssertFatal(nb_rbs_required_per_slice[r_sched[s]] >= r_traffic[s],
+                "Overflow detected in Phase 3 (R)\n");
+    traffic = cmin(traffic, resources_remaining);
+    resources_remaining -= traffic;
+    added_r_traffic += traffic;
+    float pct_to_add = 1.0*traffic/N_RB_DL;
+    sli->dl[r_sched[s]].pct += pct_to_add;
+    total_sched_traffic += traffic;
+    phase3_sched[r_sched[s]] += traffic;
+    total_pct += pct_to_add;
+    sli->dl[r_sched[s]].config.rate.rate -= traffic;
+    sli->dl[r_sched[s]].config.rate.last_unsent -= traffic;
+    if(resources_remaining == 0)
+      break;
+    s++;
+    if (s == total_r_sched) s = 0;
+    if (s == highest_rate_index)
+      break;
+
+  }
+
+
+  testret:
+  AssertFatal(total_pct >= 0 && total_pct <= 1.01,
+              "total_pct not within legal boundaries: %f, r_slices %d, p_slices %d",total_pct, total_r_sched, total_p_sched);
+  return;
+
+}
 //------------------------------------------------------------------------------
 void
 schedule_dlsch(module_id_t module_idP, frame_t frameP, sub_frame_t subframeP, int *mbsfn_flag) {
-  int i = 0;
+  int slice_idx, CC_id, slice_index;
+  int min_rb_unit[NFAPI_CC_MAX];
+  UE_list_t *UE_list = &RC.mac[module_idP]->UE_list;
+
   slice_info_t *sli = &RC.mac[module_idP]->slice_info;
   memset(sli->rballoc_sub, 0, sizeof(sli->rballoc_sub));
 
-  for (i = 0; i < sli->n_dl; i++) {
+  if(sli->is_new) {
+
+    for (CC_id = 0; CC_id < RC.nb_mac_CC[module_idP]; CC_id++) {
+      min_rb_unit[CC_id] = get_min_rb_unit(module_idP, CC_id);
+    }
+    // Get required RBs so that resources to give to each slice can be accommodated to the required resources
+    uint16_t nb_rbs_required_per_slice[MAX_NUM_SLICES];
+    uint16_t available_rbs = 0;
+    for (slice_idx = 0; slice_idx < sli->n_dl; slice_idx++) {
+      uint16_t(*nb_rbs_required)[MAX_MOBILES_PER_ENB] =
+          sli->pre_processor_results[slice_idx].nb_rbs_required;
+      uint8_t(*MIMO_mode_indicator)[N_RBG_MAX] =
+          sli->pre_processor_results[slice_idx].MIMO_mode_indicator;
+      memset(&sli->pre_processor_results[slice_idx], 0,
+             sizeof(sli->pre_processor_results[slice_idx]));
+      dlsch_scheduler_pre_processor_reset(
+          module_idP, slice_idx, frameP, subframeP, min_rb_unit,
+          nb_rbs_required, sli->rballoc_sub, MIMO_mode_indicator,
+          mbsfn_flag); // FIXME: Not sure if useful
+      store_dlsch_buffer(module_idP, slice_idx, frameP, subframeP);
+      // Assign_rbs_required should assign RBs required with no restrictions
+      sli->dl[slice_idx].pct = 1.0;
+      assign_rbs_required(module_idP, slice_idx, frameP, subframeP,
+                          nb_rbs_required, min_rb_unit);
+      nb_rbs_required_per_slice[slice_idx] = 0;
+
+      int N_RBG[NFAPI_CC_MAX];
+      for (CC_id = 0; CC_id < (int)RC.nb_mac_CC[module_idP]; CC_id++) {
+        COMMON_channels_t *cc;
+        cc = &RC.mac[module_idP]->common_channels[CC_id];
+        N_RBG[CC_id] = to_rbg(cc->mib->message.dl_Bandwidth);
+        for (int i = 0; i < N_RBG[CC_id]; i++) {
+          if (sli->rballoc_sub[CC_id][i] == 0)
+            available_rbs++;
+        }
+      }
+      available_rbs = 50;
+      for (int UE_id = 0; UE_id < MAX_MOBILES_PER_ENB; UE_id++) {
+        if (UE_list->active[UE_id] != TRUE)
+          continue;
+        if (!ue_dl_slice_membership(module_idP, UE_id, slice_idx))
+          continue;
+        // FIXME: get CC from ordered list
+        for (int n = 0; n < UE_list->numactiveCCs[UE_id]; n++) {
+          nb_rbs_required_per_slice[slice_idx] += nb_rbs_required[n][UE_id];
+        }
+      }
+    }
+    // nb_rbs_required - number of RBs required per user
+    // min_rb_unit - minimum possible allocation
+    set_slice_resource_allocation(module_idP, frameP, subframeP, sli,
+                                  nb_rbs_required_per_slice, available_rbs);
+  }
+  //Implement phases
+  /*
+  int start_slice = (subframeP*10 + frameP) % sli->n_dl;
+  slice_idx = start_slice;
+  while(1) {
     // Run each enabled slice-specific schedulers one by one
-    sli->dl[i].sched_cb(module_idP,
-                        i,
+    sli->dl[slice_idx].sched_cb(module_idP, slice_idx, frameP, subframeP,
+                                mbsfn_flag);
+
+    slice_idx++;
+    if (slice_idx == start_slice)
+      break;
+    if (slice_idx == sli->n_dl)
+      slice_idx = 0;
+  }*/
+
+  for (slice_idx = 0; slice_idx < sli->n_dl; slice_idx++) {
+    // Run each enabled slice-specific schedulers one by one
+    slice_index = ((subframeP*10 + frameP) + slice_idx) % sli->n_dl;
+    //slice_index = slice_idx;
+    //int slice_to_sched = slice_idx;
+    sli->dl[slice_index].sched_cb(module_idP,
+                        slice_index,
                         frameP,
                         subframeP,
                         mbsfn_flag/*, dl_info*/);
@@ -596,6 +976,23 @@ schedule_ue_spec(module_id_t module_idP,
   stop_meas(&eNB->schedule_dlsch_preprocessor);
   VCD_SIGNAL_DUMPER_DUMP_FUNCTION_BY_NAME(VCD_SIGNAL_DUMPER_FUNCTIONS_DLSCH_PREPROCESSOR,
                                           VCD_FUNCTION_OUT);
+/*
+  uint32_t in_profile_scheduled = 0;
+  uint32_t out_profile_scheduled = 0;
+
+  if (! eNB->slice_info.is_new){
+    for (UE_id = UE_list->head; UE_id >= 0; UE_id = UE_list->next[UE_id]) {
+      if (UE_RNTI(module_idP, UE_id) == NOT_A_RNTI) continue;
+      if (UE_list->UE_sched_ctrl[UE_id].ul_out_of_sync == 1) continue;
+      if (!ue_dl_slice_membership(module_idP, UE_id, slice_idxP)) continue;
+      ue_sched_ctrl = &UE_list->UE_sched_ctrl[UE_id];
+      for (i = 0; i < UE_num_active_CC(UE_list, UE_id); i++) {
+        CC_id = UE_list->ordered_CCids[i][UE_id];
+        in_profile_scheduled += ue_sched_ctrl->pre_nb_available_rbs[CC_id];
+      }
+    }
+  }
+*/
 
   if (RC.mac[module_idP]->slice_info.interslice_share_active) {
     dlsch_scheduler_interslice_multiplexing(module_idP,

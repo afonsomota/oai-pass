@@ -1277,6 +1277,11 @@ void pre_scd_nb_rbs_required(    module_id_t     module_idP,
 uint16_t nb_rbs_allowed_slice(float rb_percentage, int total_rbs);
 int ue_dl_slice_membership(module_id_t mod_id, int UE_id, int slice_idx);
 int ue_ul_slice_membership(module_id_t mod_id, int UE_id, int slice_idx);
+/** \brief sets a cycle of the slice token bucker filter, i.e. adds tokens regardind configured rate
+ *
+ * @param filter  token bucket filter structure of the slice;
+ */
+void p_slice_token_cycle(token_bucket_t *filter);
 
 /* DRX Configuration */
 /* Configure local DRX timers and thresholds in UE context, following the drx_configuration input */

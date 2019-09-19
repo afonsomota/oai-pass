@@ -5265,3 +5265,15 @@ ue_ul_slice_membership(module_id_t mod_id,
 
   return eNB->UE_list.active[UE_id] == TRUE && eNB->UE_list.assoc_ul_slice_idx[UE_id] == slice_idx;
 }
+//------------------------------------------------------------------------------
+void
+p_slice_token_cycle(token_bucket_t *filter)
+//------------------------------------------------------------------------------
+{
+  uint32_t sum = filter->tokens + filter->rate;
+  if (sum > filter->capacity){
+    filter->tokens = filter->capacity;
+  } else {
+    filter-> tokens = sum;
+  }
+}

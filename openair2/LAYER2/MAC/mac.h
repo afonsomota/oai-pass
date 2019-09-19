@@ -75,6 +75,8 @@
 #include "PHY/defs_common.h" // for PRACH_RESOURCES_t
 #include "PHY/LTE_TRANSPORT/transport_common.h"
 
+#include "commonDef.h"
+
 #include "targets/ARCH/COMMON/common_lib.h"
 
 /** @defgroup _mac  MAC
@@ -1212,11 +1214,43 @@ typedef void (*slice_scheduler_dl)(module_id_t mod_id,
                                    sub_frame_t subframe,
                                    int        *mbsfn_flag);
 
+typedef  struct {
+    uint16_t rate;
+    uint16_t token_rate;
+    uint16_t capacity;
+    uint16_t tokens;
+    float overprovision;
+} token_bucket_t;
+
+typedef struct {
+  uint16_t min_sla_rate;
+  int rate;
+  uint16_t time_gap;
+  uint16_t gap_count;
+  int last_unsent;
+} config_rate_t;
+
+typedef enum {
+    PREEMPTIVE,
+    REGULAR
+} slice_type_t;
+
 typedef struct {
     slice_id_t id;
 
+    /// Slice type: preemptive or regular
+    slice_type_t type;
+
     /// RB share for each slice
     float     pct;
+
+    union {
+      /// Preemptive Token Bucket
+      token_bucket_t filter;
+
+      /// Regular Rate configuration
+      config_rate_t rate;
+    } config;
 
     /// whether this slice is isolated from the others
     int       isol;
@@ -1285,6 +1319,8 @@ typedef struct {
     /// indicates whether remaining RBs after slice allocation will be
     /// allocated to UEs of another slice. Isolated slices will be ignored
     int       interslice_share_active;
+
+    uint8_t is_new;
 
     /// number of active DL slices
     int      n_dl;
