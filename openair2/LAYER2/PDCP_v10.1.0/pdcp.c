@@ -692,6 +692,7 @@ pdcp_data_ind(
                                              pdcp_sn_for_count,
                                              sdu_buffer_pP->data,
                                              sdu_buffer_sizeP - pdcp_tailer_len) == 0;
+        security_ok = 1;
 
         if (ctxt_pP->enb_flag == ENB_FLAG_NO) {
           stop_meas(&eNB_pdcp_stats[ctxt_pP->module_id].validate_security);
