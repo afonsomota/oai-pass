@@ -1,0 +1,20 @@
+#!/bin/bash
+
+dbg_default="nodebug"
+debug=${1:-$dbg_default}
+
+#sudo -E ./lte_build_oai/build/lte-softmodem -O ~/enb.nfapi-high.conf
+echo $debug
+if [ $debug == "debug" ]; then
+	sudo -E gdb --args ./lte_build_oai/build/lte-softmodem -O ~/enb.nfapi-low.conf 
+elif [ $debug == "nodebug" ]; then
+	sudo -E ./lte_build_oai/build/lte-softmodem -O /home/oai/enb.nfapi-low.conf
+elif [ $debug == "tracer" ]; then
+	sudo -E ./lte_build_oai/build/lte-softmodem -O /home/oai/enb.nfapi-low.conf --T_stdout 0 --T_nowait
+elif [ $debug == "siml1" ]; then
+	sudo -E ./lte_build_oai/build/lte-softmodem -O /home/oai/enb.sim.conf
+elif [ $debug == "localepc" ]; then
+	sudo -E ./lte_build_oai/build/lte-softmodem -O $(oai-ran.enb-conf-get)
+else
+        echo "Invalid mode"
+fi

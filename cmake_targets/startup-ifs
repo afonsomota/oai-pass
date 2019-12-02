@@ -1,0 +1,9 @@
+#!/bin/bash
+
+sudo ifconfig virbr2:mme 192.168.100.130
+sudo ifconfig virbr2:spgw 192.168.100.131
+
+sudo ifconfig tun0:mme 10.8.0.130
+sudo ifconfig tun0:spgw 10.8.0.131
+
+sudo ifconfig enp3s0:lte 192.168.7.100
